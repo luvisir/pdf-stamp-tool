@@ -34,6 +34,7 @@ const state = {
     brightness: 100,
     saturation: 100,
   },
+  exportMode: 'compat',
   selectedLayer: 'normal',
   edgeStamp: {
     edge: 'right',
@@ -152,6 +153,15 @@ app.innerHTML = `
       </section>
 
       <section class="panel">
+        <h2>导出模式</h2>
+        <div class="segmented">
+          <button id="exportCompat" class="active" type="button">兼容模式</button>
+          <button id="exportClear" type="button">清晰模式</button>
+        </div>
+        <p id="exportModeHint" class="status">兼容模式：2 倍渲染，文件较小，位置最稳。</p>
+      </section>
+
+      <section class="panel">
         <button id="exportPdf" class="primary" type="button">导出盖章 PDF</button>
         <p id="message" class="status"></p>
       </section>
@@ -195,6 +205,9 @@ const els = {
   edgeBlur: document.querySelector('#edgeBlur'),
   edgeBrightness: document.querySelector('#edgeBrightness'),
   edgeSaturation: document.querySelector('#edgeSaturation'),
+  exportCompat: document.querySelector('#exportCompat'),
+  exportClear: document.querySelector('#exportClear'),
+  exportModeHint: document.querySelector('#exportModeHint'),
   exportPdf: document.querySelector('#exportPdf'),
   message: document.querySelector('#message'),
 };
@@ -206,6 +219,20 @@ const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 function setMessage(text, type = '') {
   els.message.textContent = text;
   els.message.dataset.type = type;
+}
+
+function setExportMode(mode) {
+  state.exportMode = mode;
+  els.exportCompat.classList.toggle('active', mode === 'compat');
+  els.exportClear.classList.toggle('active', mode === 'clear');
+  els.exportModeHint.textContent =
+    mode === 'clear'
+      ? '清晰模式：4 倍渲染，文字更清晰，文件更大且导出更慢。'
+      : '兼容模式：2 倍渲染，文件较小，位置最稳。';
+}
+
+function getExportScale() {
+  return state.exportMode === 'clear' ? 4 : 2;
 }
 
 function updateFileStatus() {
@@ -392,6 +419,11 @@ function drawNormalStampOnExportCanvas(context, stamp, image, scale) {
   };
 
   drawCanvasImageRotated(context, image, rect, stamp.rotation || 0, stamp.opacity);
+}
+
+function getNormalStampForPage(pageNumber, pageSize) {
+  if (!state.normalEnabled || state.hiddenNormalPages.has(pageNumber)) return null;
+  return state.normalStamps.get(pageNumber) || defaultNormalStamp(pageSize);
 }
 
 function drawEdgeStampOnExportCanvas(context, pageNumber, pageSize, scale) {
@@ -724,6 +756,47 @@ async function handleSealUpload(event) {
   }
 }
 
+async function exportStampedPdfBytes() {
+  const outputPdf = await PDFDocument.create();
+  const exportScale = getExportScale();
+  const normalEffectCanvas = state.normalEnabled
+    ? createEffectCanvasFromImage(state.sealImage, state.normalEffects)
+    : null;
+
+  for (let pageNumber = 1; pageNumber <= state.pageCount; pageNumber += 1) {
+    const sourcePage = await state.pdfDoc.getPage(pageNumber);
+    const baseViewport = sourcePage.getViewport({ scale: 1 });
+    const renderViewport = sourcePage.getViewport({ scale: exportScale });
+    const pageCanvas = createCanvas(renderViewport.width, renderViewport.height);
+    const context = pageCanvas.getContext('2d');
+
+    await sourcePage.render({ canvasContext: context, viewport: renderViewport }).promise;
+
+    const pageSize = { width: baseViewport.width, height: baseViewport.height };
+    state.pageSize = pageSize;
+    const stamp = getNormalStampForPage(pageNumber, pageSize);
+
+    if (stamp) {
+      drawNormalStampOnExportCanvas(context, stamp, normalEffectCanvas, exportScale);
+    }
+
+    if (state.edgeEnabled) {
+      drawEdgeStampOnExportCanvas(context, pageNumber, pageSize, exportScale);
+    }
+
+    const pagePng = await outputPdf.embedPng(await canvasToPngBytes(pageCanvas));
+    const outputPage = outputPdf.addPage([baseViewport.width, baseViewport.height]);
+    outputPage.drawImage(pagePng, {
+      x: 0,
+      y: 0,
+      width: baseViewport.width,
+      height: baseViewport.height,
+    });
+  }
+
+  return outputPdf.save();
+}
+
 async function exportPdf() {
   if (!state.pdfBytes) {
     setMessage('请先上传 PDF。', 'error');
@@ -741,45 +814,8 @@ async function exportPdf() {
   }
 
   try {
-    setMessage('正在导出 PDF...', '');
-    const outputPdf = await PDFDocument.create();
-    const exportScale = 2;
-    const normalEffectCanvas = state.normalEnabled
-      ? createEffectCanvasFromImage(state.sealImage, state.normalEffects)
-      : null;
-
-    for (let pageNumber = 1; pageNumber <= state.pageCount; pageNumber += 1) {
-      const sourcePage = await state.pdfDoc.getPage(pageNumber);
-      const baseViewport = sourcePage.getViewport({ scale: 1 });
-      const renderViewport = sourcePage.getViewport({ scale: exportScale });
-      const pageCanvas = createCanvas(renderViewport.width, renderViewport.height);
-      const context = pageCanvas.getContext('2d');
-
-      await sourcePage.render({ canvasContext: context, viewport: renderViewport }).promise;
-
-      const pageSize = { width: baseViewport.width, height: baseViewport.height };
-      state.pageSize = pageSize;
-
-      if (state.normalEnabled && !state.hiddenNormalPages.has(pageNumber)) {
-        const stamp = state.normalStamps.get(pageNumber) || defaultNormalStamp(pageSize);
-        drawNormalStampOnExportCanvas(context, stamp, normalEffectCanvas, exportScale);
-      }
-
-      if (state.edgeEnabled) {
-        drawEdgeStampOnExportCanvas(context, pageNumber, pageSize, exportScale);
-      }
-
-      const pagePng = await outputPdf.embedPng(await canvasToPngBytes(pageCanvas));
-      const outputPage = outputPdf.addPage([baseViewport.width, baseViewport.height]);
-      outputPage.drawImage(pagePng, {
-        x: 0,
-        y: 0,
-        width: baseViewport.width,
-        height: baseViewport.height,
-      });
-    }
-
-    const stampedBytes = await outputPdf.save();
+    setMessage(state.exportMode === 'clear' ? '正在导出高清 PDF...' : '正在导出 PDF...', '');
+    const stampedBytes = await exportStampedPdfBytes();
     const blob = new Blob([stampedBytes], { type: 'application/pdf' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -851,6 +887,8 @@ els.deleteNormal.addEventListener('click', () => {
 [els.edgeBlur, els.edgeBrightness, els.edgeSaturation].forEach((input) => {
   input.addEventListener('input', updateEdgeFromInputs);
 });
+els.exportCompat.addEventListener('click', () => setExportMode('compat'));
+els.exportClear.addEventListener('click', () => setExportMode('clear'));
 els.exportPdf.addEventListener('click', exportPdf);
 window.addEventListener('pointermove', onPointerMove);
 window.addEventListener('pointerup', onPointerUp);
