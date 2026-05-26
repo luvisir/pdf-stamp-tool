@@ -55,18 +55,25 @@ export function getEdgeStampSlices({ imageWidth, imageHeight, pageCount }) {
 
 export function getEdgeStampPlacement({ page, settings, image, pageCount, pageOffset }) {
   const fullWidth = settings.height * (image.width / image.height);
-  const sliceWidth = fullWidth / pageCount;
-  const fullSealLeft = settings.edge === 'left'
-    ? -fullWidth + settings.pushIn
-    : page.width - settings.pushIn;
-  const x = fullSealLeft + sliceWidth * pageOffset;
+  const firstSliceWidth = clamp(settings.pushIn, 0, fullWidth);
+  const restSliceWidth = pageCount > 1 ? (fullWidth - firstSliceWidth) / (pageCount - 1) : firstSliceWidth;
+  const sliceWidth = pageOffset === 0 ? firstSliceWidth : restSliceWidth;
+  const sourceScale = image.width / fullWidth;
+  const sourceX = pageOffset === 0
+    ? 0
+    : firstSliceWidth * sourceScale + restSliceWidth * sourceScale * (pageOffset - 1);
+  const x = settings.edge === 'left' ? 0 : page.width - sliceWidth;
 
   return {
     x: round2(x),
     y: round2(page.height - settings.top - settings.height),
     width: round2(sliceWidth),
     height: round2(settings.height),
-    sourceX: round2((image.width / pageCount) * pageOffset),
-    sourceWidth: round2(image.width / pageCount),
+    sourceX: round2(sourceX),
+    sourceWidth: round2(sliceWidth * sourceScale),
   };
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }

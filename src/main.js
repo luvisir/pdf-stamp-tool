@@ -194,6 +194,117 @@ function loadImageFromUrl(url) {
   });
 }
 
+function getCoveredPageCount() {
+  return state.edgeStamp.pageEnd - state.edgeStamp.pageStart + 1;
+}
+
+function createCanvas(width, height) {
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.ceil(width));
+  canvas.height = Math.max(1, Math.ceil(height));
+  return canvas;
+}
+
+function getTrimBounds(canvas) {
+  const context = canvas.getContext('2d');
+  const { data, width, height } = context.getImageData(0, 0, canvas.width, canvas.height);
+  let minX = width;
+  let minY = height;
+  let maxX = -1;
+  let maxY = -1;
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      if (data[(y * width + x) * 4 + 3] > 8) {
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+      }
+    }
+  }
+
+  if (maxX < minX || maxY < minY) {
+    return { x: 0, y: 0, width: canvas.width, height: canvas.height };
+  }
+
+  return {
+    x: minX,
+    y: minY,
+    width: maxX - minX + 1,
+    height: maxY - minY + 1,
+  };
+}
+
+function createRotatedSealCanvas() {
+  const angle = (state.edgeStamp.rotation * Math.PI) / 180;
+  const { naturalWidth: sourceWidth, naturalHeight: sourceHeight } = state.sealImage;
+  const sin = Math.abs(Math.sin(angle));
+  const cos = Math.abs(Math.cos(angle));
+  const rotatedWidth = sourceWidth * cos + sourceHeight * sin;
+  const rotatedHeight = sourceWidth * sin + sourceHeight * cos;
+  const canvas = createCanvas(rotatedWidth, rotatedHeight);
+  const context = canvas.getContext('2d');
+
+  context.translate(canvas.width / 2, canvas.height / 2);
+  context.rotate(angle);
+  context.drawImage(state.sealImage, -sourceWidth / 2, -sourceHeight / 2);
+
+  const bounds = getTrimBounds(canvas);
+  const trimmed = createCanvas(bounds.width, bounds.height);
+  trimmed
+    .getContext('2d')
+    .drawImage(canvas, bounds.x, bounds.y, bounds.width, bounds.height, 0, 0, trimmed.width, trimmed.height);
+
+  return trimmed;
+}
+
+function createEdgeSlice(pageOffset, pageCount) {
+  const rotated = createRotatedSealCanvas();
+  const placement = getEdgeStampPlacement({
+    page: { width: 1, height: 1 },
+    settings: {
+      ...state.edgeStamp,
+      top: 0,
+      height: rotated.height,
+      pushIn: state.edgeStamp.pushIn * (rotated.height / state.edgeStamp.height),
+    },
+    image: { width: rotated.width, height: rotated.height },
+    pageCount,
+    pageOffset,
+  });
+  const slice = createCanvas(placement.sourceWidth, rotated.height);
+
+  slice
+    .getContext('2d')
+    .drawImage(
+      rotated,
+      placement.sourceX,
+      0,
+      placement.sourceWidth,
+      rotated.height,
+      0,
+      0,
+      slice.width,
+      slice.height,
+    );
+
+  return { canvas: slice, rotated };
+}
+
+async function canvasToPngBytes(canvas) {
+  return new Uint8Array(await new Promise((resolve, reject) => {
+    canvas.toBlob(async (blob) => {
+      if (!blob) {
+        reject(new Error('骑缝章切片失败。'));
+        return;
+      }
+
+      resolve(await blob.arrayBuffer());
+    }, 'image/png');
+  }));
+}
+
 function defaultNormalStamp(pageSize) {
   const width = mmToPt(Number(els.normalWidth.value));
   const aspect = state.sealImage ? state.sealImage.naturalHeight / state.sealImage.naturalWidth : 1;
@@ -309,15 +420,16 @@ function renderOverlays() {
 }
 
 function renderEdgeOverlay() {
-  const { pageStart, pageEnd, height, opacity, rotation } = state.edgeStamp;
+  const { pageStart, pageEnd, height, opacity } = state.edgeStamp;
   if (state.currentPage < pageStart || state.currentPage > pageEnd) return;
 
-  const coveredPages = pageEnd - pageStart + 1;
+  const coveredPages = getCoveredPageCount();
   const pageOffset = state.currentPage - pageStart;
+  const slice = createEdgeSlice(pageOffset, coveredPages);
   const placement = getEdgeStampPlacement({
     page: state.pageSize,
     settings: state.edgeStamp,
-    image: { width: state.sealImage.naturalWidth, height: state.sealImage.naturalHeight },
+    image: { width: slice.rotated.width, height: slice.rotated.height },
     pageCount: coveredPages,
     pageOffset,
   });
@@ -334,14 +446,12 @@ function renderEdgeOverlay() {
   edge.style.width = `${rect.width}px`;
   edge.style.height = `${rect.height}px`;
   edge.style.opacity = String(opacity);
-  edge.style.transform = `rotate(${rotation}deg)`;
 
   const image = document.createElement('img');
-  image.src = state.sealUrl;
+  image.src = slice.canvas.toDataURL('image/png');
   image.draggable = false;
   image.style.height = `${rect.height}px`;
-  image.style.width = `${rect.width * coveredPages}px`;
-  image.style.transform = `translateX(${-pageOffset * rect.width}px)`;
+  image.style.width = `${rect.width}px`;
 
   edge.append(image);
   edge.addEventListener('pointerdown', (event) => startEdgeDrag(event));
@@ -492,25 +602,11 @@ async function handleSealUpload(event) {
 }
 
 async function cropSealSlice(pageOffset, pageCount) {
-  const source = await createImageBitmap(new Blob([state.sealBytes], { type: 'image/png' }));
-  const sliceWidth = source.width / pageCount;
-  const sx = sliceWidth * pageOffset;
-  const sw = pageOffset === pageCount - 1 ? source.width - sx : sliceWidth;
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.ceil(sw);
-  canvas.height = source.height;
-  const context = canvas.getContext('2d');
-  context.drawImage(source, sx, 0, sw, source.height, 0, 0, canvas.width, canvas.height);
-
-  return new Uint8Array(await new Promise((resolve, reject) => {
-    canvas.toBlob(async (blob) => {
-      if (!blob) {
-        reject(new Error('骑缝章切片失败。'));
-        return;
-      }
-      resolve(await blob.arrayBuffer());
-    }, 'image/png');
-  }));
+  const slice = createEdgeSlice(pageOffset, pageCount);
+  return {
+    bytes: await canvasToPngBytes(slice.canvas),
+    image: { width: slice.rotated.width, height: slice.rotated.height },
+  };
 }
 
 async function exportPdf() {
@@ -553,19 +649,20 @@ async function exportPdf() {
     if (state.edgeEnabled) {
       const pageStart = state.edgeStamp.pageStart;
       const pageEnd = state.edgeStamp.pageEnd;
-      const pageCount = pageEnd - pageStart + 1;
+      const pageCount = getCoveredPageCount();
 
       for (let pageNumber = pageStart; pageNumber <= pageEnd; pageNumber += 1) {
         const page = pages[pageNumber - 1];
-        const sliceBytes = await cropSealSlice(pageNumber - pageStart, pageCount);
-        const slicePng = await pdfDoc.embedPng(sliceBytes);
+        const pageOffset = pageNumber - pageStart;
+        const slice = await cropSealSlice(pageNumber - pageStart, pageCount);
+        const slicePng = await pdfDoc.embedPng(slice.bytes);
         const { width, height } = page.getSize();
         const placement = getEdgeStampPlacement({
           page: { width, height },
           settings: state.edgeStamp,
-          image: { width: state.sealImage.naturalWidth, height: state.sealImage.naturalHeight },
+          image: slice.image,
           pageCount,
-          pageOffset: pageNumber - pageStart,
+          pageOffset,
         });
 
         page.drawImage(slicePng, {
@@ -573,7 +670,6 @@ async function exportPdf() {
           y: placement.y,
           width: placement.width,
           height: placement.height,
-          rotate: degrees(state.edgeStamp.rotation || 0),
           opacity: state.edgeStamp.opacity,
         });
       }

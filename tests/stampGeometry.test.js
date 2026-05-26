@@ -58,8 +58,8 @@ test('uses the remaining pixels for the last page-edge slice', () => {
   });
 });
 
-test('places right edge slice without stretching the full seal ratio', () => {
-  const placement = getEdgeStampPlacement({
+test('uses push-in as the first page slice width without stretching', () => {
+  const first = getEdgeStampPlacement({
     page: { width: 600, height: 800 },
     settings: {
       top: 100,
@@ -67,17 +67,37 @@ test('places right edge slice without stretching the full seal ratio', () => {
       pushIn: 72,
       edge: 'right',
     },
-    image: { width: 900, height: 300 },
+    image: { width: 300, height: 300 },
     pageCount: 3,
     pageOffset: 0,
   });
+  const second = getEdgeStampPlacement({
+    page: { width: 600, height: 800 },
+    settings: {
+      top: 100,
+      height: 120,
+      pushIn: 72,
+      edge: 'right',
+    },
+    image: { width: 300, height: 300 },
+    pageCount: 3,
+    pageOffset: 1,
+  });
 
-  assert.deepEqual(placement, {
+  assert.deepEqual(first, {
     x: 528,
     y: 580,
-    width: 120,
+    width: 72,
     height: 120,
     sourceX: 0,
-    sourceWidth: 300,
+    sourceWidth: 180,
+  });
+  assert.deepEqual(second, {
+    x: 576,
+    y: 580,
+    width: 24,
+    height: 120,
+    sourceX: 180,
+    sourceWidth: 60,
   });
 });
