@@ -6,6 +6,7 @@ import {
   getEdgeStampSlices,
   pdfRectToScreenRect,
   screenRectToPdfRect,
+  visualRectToPdfRect,
 } from '../src/stampGeometry.js';
 
 test('converts screen rectangle to PDF coordinates with inverted Y axis', () => {
@@ -26,6 +27,19 @@ test('converts PDF rectangle back to screen coordinates', () => {
   });
 
   assert.deepEqual(rect, { x: 100, y: 200, width: 80, height: 40 });
+});
+
+test('converts visual export rectangle through PDF.js viewport mapping', () => {
+  const viewport = {
+    convertToPdfPoint: (x, y) => [y, x],
+  };
+
+  const rect = visualRectToPdfRect({
+    viewport,
+    visualRect: { x: 100, y: 200, width: 80, height: 40 },
+  });
+
+  assert.deepEqual(rect, { x: 200, y: 100, width: 40, height: 80 });
 });
 
 test('splits page-edge stamp into equal vertical image slices', () => {

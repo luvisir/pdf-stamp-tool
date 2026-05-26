@@ -24,6 +24,21 @@ export function pdfRectToScreenRect({ pdfRect, viewport, page }) {
   };
 }
 
+export function visualRectToPdfRect({ visualRect, viewport }) {
+  const topLeft = viewport.convertToPdfPoint(visualRect.x, visualRect.y);
+  const bottomRight = viewport.convertToPdfPoint(
+    visualRect.x + visualRect.width,
+    visualRect.y + visualRect.height,
+  );
+
+  return {
+    x: round2(Math.min(topLeft[0], bottomRight[0])),
+    y: round2(Math.min(topLeft[1], bottomRight[1])),
+    width: round2(Math.abs(bottomRight[0] - topLeft[0])),
+    height: round2(Math.abs(bottomRight[1] - topLeft[1])),
+  };
+}
+
 export function getEdgeStampSlices({ imageWidth, imageHeight, pageCount }) {
   if (!Number.isFinite(imageWidth) || imageWidth <= 0) {
     throw new Error('imageWidth must be greater than 0');

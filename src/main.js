@@ -4,7 +4,12 @@ import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
 
 import { buildStampFilter } from './stampEffects.js';
-import { getEdgeStampPlacement, pdfRectToScreenRect, screenRectToPdfRect } from './stampGeometry.js';
+import {
+  getEdgeStampPlacement,
+  pdfRectToScreenRect,
+  screenRectToPdfRect,
+  visualRectToPdfRect,
+} from './stampGeometry.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
@@ -225,6 +230,20 @@ function loadImageFromUrl(url) {
 
 function getCoveredPageCount() {
   return state.edgeStamp.pageEnd - state.edgeStamp.pageStart + 1;
+}
+
+async function getExportViewport(pageNumber) {
+  const page = await state.pdfDoc.getPage(pageNumber);
+  return page.getViewport({ scale: 1 });
+}
+
+function pdfLikeRectToVisualRect(rect, viewport) {
+  return {
+    x: rect.x,
+    y: viewport.height - rect.y - rect.height,
+    width: rect.width,
+    height: rect.height,
+  };
 }
 
 function createCanvas(width, height) {
@@ -709,11 +728,16 @@ async function exportPdf() {
       for (const [pageNumber, stamp] of state.normalStamps) {
         const page = pages[pageNumber - 1];
         if (!page) continue;
+        const viewport = await getExportViewport(pageNumber);
+        const drawRect = visualRectToPdfRect({
+          viewport,
+          visualRect: pdfLikeRectToVisualRect(stamp, viewport),
+        });
         page.drawImage(normalEffectPng, {
-          x: stamp.x,
-          y: stamp.y,
-          width: stamp.width,
-          height: stamp.height,
+          x: drawRect.x,
+          y: drawRect.y,
+          width: drawRect.width,
+          height: drawRect.height,
           rotate: degrees(stamp.rotation || 0),
           opacity: stamp.opacity,
         });
@@ -730,20 +754,24 @@ async function exportPdf() {
         const pageOffset = pageNumber - pageStart;
         const slice = await cropSealSlice(pageNumber - pageStart, pageCount);
         const slicePng = await pdfDoc.embedPng(slice.bytes);
-        const { width, height } = page.getSize();
+        const viewport = await getExportViewport(pageNumber);
         const placement = getEdgeStampPlacement({
-          page: { width, height },
+          page: { width: viewport.width, height: viewport.height },
           settings: state.edgeStamp,
           image: slice.image,
           pageCount,
           pageOffset,
         });
+        const drawRect = visualRectToPdfRect({
+          viewport,
+          visualRect: pdfLikeRectToVisualRect(placement, viewport),
+        });
 
         page.drawImage(slicePng, {
-          x: placement.x,
-          y: placement.y,
-          width: placement.width,
-          height: placement.height,
+          x: drawRect.x,
+          y: drawRect.y,
+          width: drawRect.width,
+          height: drawRect.height,
           opacity: state.edgeStamp.opacity,
         });
       }
