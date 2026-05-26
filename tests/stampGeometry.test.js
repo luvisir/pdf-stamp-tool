@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  getEdgeStampPlacement,
   getEdgeStampSlices,
   pdfRectToScreenRect,
   screenRectToPdfRect,
@@ -54,5 +55,25 @@ test('uses the remaining pixels for the last page-edge slice', () => {
     y: 0,
     width: 333.33,
     height: 300,
+  });
+});
+
+test('places right edge stamp with explicit exposed width and edge inset', () => {
+  const placement = getEdgeStampPlacement({
+    page: { width: 600, height: 800 },
+    settings: {
+      top: 100,
+      height: 120,
+      exposedWidth: 72,
+      edgeInset: 18,
+      edge: 'right',
+    },
+  });
+
+  assert.deepEqual(placement, {
+    x: 510,
+    y: 580,
+    width: 72,
+    height: 120,
   });
 });

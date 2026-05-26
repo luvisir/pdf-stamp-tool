@@ -223,6 +223,13 @@ h2 {
   width: 100%;
 }
 
+.danger {
+  border-color: #fecaca !important;
+  color: #b91c1c !important;
+  margin-top: 8px;
+  width: 100%;
+}
+
 .hidden {
   display: none !important;
 }

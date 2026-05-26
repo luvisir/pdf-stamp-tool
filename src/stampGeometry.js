@@ -52,3 +52,16 @@ export function getEdgeStampSlices({ imageWidth, imageHeight, pageCount }) {
     };
   });
 }
+
+export function getEdgeStampPlacement({ page, settings }) {
+  const x = settings.edge === 'left'
+    ? settings.edgeInset
+    : page.width - settings.edgeInset - settings.exposedWidth;
+
+  return {
+    x: round2(x),
+    y: round2(page.height - settings.top - settings.height),
+    width: round2(settings.exposedWidth),
+    height: round2(settings.height),
+  };
+}

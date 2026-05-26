@@ -3,7 +3,7 @@ import { PDFDocument, degrees } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
 
-import { pdfRectToScreenRect, screenRectToPdfRect } from './stampGeometry.js';
+import { getEdgeStampPlacement, pdfRectToScreenRect, screenRectToPdfRect } from './stampGeometry.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
@@ -23,13 +23,17 @@ const state = {
   normalEnabled: true,
   edgeEnabled: false,
   normalStamps: new Map(),
+  hiddenNormalPages: new Set(),
   selectedLayer: 'normal',
   edgeStamp: {
     edge: 'right',
     pageStart: 1,
     pageEnd: 1,
     top: 180,
+    edgeInset: 0,
+    exposedWidth: 85,
     height: 110,
+    rotation: 0,
     opacity: 0.9,
   },
   dragging: null,
@@ -107,6 +111,7 @@ app.innerHTML = `
         <label>旋转（度）<input id="normalRotation" type="number" min="-180" max="180" value="0" /></label>
         <label>透明度（%）<input id="normalOpacity" type="number" min="10" max="100" value="90" /></label>
         <button id="centerNormal" type="button">放到当前页中间</button>
+        <button id="deleteNormal" class="danger" type="button">删除当前页公章</button>
       </section>
 
       <section id="edgePanel" class="panel hidden">
@@ -114,7 +119,10 @@ app.innerHTML = `
         <label>页码开始<input id="edgeStart" type="number" min="1" value="1" /></label>
         <label>页码结束<input id="edgeEnd" type="number" min="1" value="1" /></label>
         <label>距页面顶部（mm）<input id="edgeTop" type="number" min="0" value="60" /></label>
+        <label>距页面边部（mm）<input id="edgeInset" type="number" min="0" value="0" /></label>
+        <label>露出宽度（mm）<input id="edgeExposedWidth" type="number" min="5" max="80" value="30" /></label>
         <label>高度（mm）<input id="edgeHeight" type="number" min="10" max="220" value="42" /></label>
+        <label>旋转（度）<input id="edgeRotation" type="number" min="-180" max="180" value="0" /></label>
         <label>透明度（%）<input id="edgeOpacity" type="number" min="10" max="100" value="90" /></label>
       </section>
 
@@ -148,10 +156,14 @@ const els = {
   normalRotation: document.querySelector('#normalRotation'),
   normalOpacity: document.querySelector('#normalOpacity'),
   centerNormal: document.querySelector('#centerNormal'),
+  deleteNormal: document.querySelector('#deleteNormal'),
   edgeStart: document.querySelector('#edgeStart'),
   edgeEnd: document.querySelector('#edgeEnd'),
   edgeTop: document.querySelector('#edgeTop'),
+  edgeInset: document.querySelector('#edgeInset'),
+  edgeExposedWidth: document.querySelector('#edgeExposedWidth'),
   edgeHeight: document.querySelector('#edgeHeight'),
+  edgeRotation: document.querySelector('#edgeRotation'),
   edgeOpacity: document.querySelector('#edgeOpacity'),
   exportPdf: document.querySelector('#exportPdf'),
   message: document.querySelector('#message'),
@@ -201,6 +213,10 @@ function defaultNormalStamp(pageSize) {
 }
 
 function getCurrentNormalStamp() {
+  if (state.hiddenNormalPages.has(state.currentPage)) {
+    return null;
+  }
+
   if (!state.normalStamps.has(state.currentPage) && state.pageSize && state.sealImage) {
     state.normalStamps.set(state.currentPage, defaultNormalStamp(state.pageSize));
   }
@@ -268,24 +284,26 @@ function renderOverlays() {
 
   if (state.normalEnabled) {
     const stamp = getCurrentNormalStamp();
-    const rect = pdfRectToScreenRect({
-      pdfRect: stamp,
-      viewport: state.viewportSize,
-      page: state.pageSize,
-    });
-    const image = document.createElement('img');
-    image.src = state.sealUrl;
-    image.className = `stamp-overlay ${state.selectedLayer === 'normal' ? 'selected' : ''}`;
-    image.style.left = `${rect.x}px`;
-    image.style.top = `${rect.y}px`;
-    image.style.width = `${rect.width}px`;
-    image.style.height = `${rect.height}px`;
-    image.style.opacity = String(stamp.opacity);
-    image.style.transform = `rotate(${stamp.rotation}deg)`;
-    image.draggable = false;
-    image.title = '拖拽移动普通章';
-    image.addEventListener('pointerdown', (event) => startNormalDrag(event, rect));
-    els.overlayLayer.append(image);
+    if (stamp) {
+      const rect = pdfRectToScreenRect({
+        pdfRect: stamp,
+        viewport: state.viewportSize,
+        page: state.pageSize,
+      });
+      const image = document.createElement('img');
+      image.src = state.sealUrl;
+      image.className = `stamp-overlay ${state.selectedLayer === 'normal' ? 'selected' : ''}`;
+      image.style.left = `${rect.x}px`;
+      image.style.top = `${rect.y}px`;
+      image.style.width = `${rect.width}px`;
+      image.style.height = `${rect.height}px`;
+      image.style.opacity = String(stamp.opacity);
+      image.style.transform = `rotate(${stamp.rotation}deg)`;
+      image.draggable = false;
+      image.title = '拖拽移动普通章';
+      image.addEventListener('pointerdown', (event) => startNormalDrag(event, rect));
+      els.overlayLayer.append(image);
+    }
   }
 
   if (state.edgeEnabled) {
@@ -294,25 +312,21 @@ function renderOverlays() {
 }
 
 function renderEdgeOverlay() {
-  const { pageStart, pageEnd, height, top, opacity } = state.edgeStamp;
+  const { pageStart, pageEnd, height, opacity, rotation } = state.edgeStamp;
   if (state.currentPage < pageStart || state.currentPage > pageEnd) return;
 
   const coveredPages = pageEnd - pageStart + 1;
   const pageOffset = state.currentPage - pageStart;
-  const totalWidth = height * (state.sealImage.naturalWidth / state.sealImage.naturalHeight);
-  const sliceWidth = totalWidth / coveredPages;
+  const placement = getEdgeStampPlacement({
+    page: state.pageSize,
+    settings: state.edgeStamp,
+  });
   const rect = pdfRectToScreenRect({
-    pdfRect: {
-      x: state.pageSize.width - sliceWidth,
-      y: state.pageSize.height - top - height,
-      width: sliceWidth,
-      height,
-    },
+    pdfRect: placement,
     viewport: state.viewportSize,
     page: state.pageSize,
   });
 
-  const scale = rect.height / height;
   const edge = document.createElement('div');
   edge.className = `edge-stamp-overlay ${state.selectedLayer === 'edge' ? 'selected' : ''}`;
   edge.style.left = `${rect.x}px`;
@@ -320,12 +334,13 @@ function renderEdgeOverlay() {
   edge.style.width = `${rect.width}px`;
   edge.style.height = `${rect.height}px`;
   edge.style.opacity = String(opacity);
+  edge.style.transform = `rotate(${rotation}deg)`;
 
   const image = document.createElement('img');
   image.src = state.sealUrl;
   image.draggable = false;
   image.style.height = `${rect.height}px`;
-  image.style.width = `${totalWidth * scale}px`;
+  image.style.width = `${rect.width * coveredPages}px`;
   image.style.transform = `translateX(${-pageOffset * rect.width}px)`;
 
   edge.append(image);
@@ -423,7 +438,10 @@ function updateEdgeFromInputs() {
   state.edgeStamp.pageStart = clamp(Number(els.edgeStart.value) || 1, 1, state.pageCount || 1);
   state.edgeStamp.pageEnd = clamp(Number(els.edgeEnd.value) || state.pageCount || 1, state.edgeStamp.pageStart, state.pageCount || 1);
   state.edgeStamp.top = mmToPt(els.edgeTop.value);
+  state.edgeStamp.edgeInset = mmToPt(els.edgeInset.value);
+  state.edgeStamp.exposedWidth = mmToPt(els.edgeExposedWidth.value);
   state.edgeStamp.height = mmToPt(els.edgeHeight.value);
+  state.edgeStamp.rotation = Number(els.edgeRotation.value) || 0;
   state.edgeStamp.opacity = Number(els.edgeOpacity.value) / 100;
   els.edgeStart.value = state.edgeStamp.pageStart;
   els.edgeEnd.value = state.edgeStamp.pageEnd;
@@ -537,22 +555,23 @@ async function exportPdf() {
       const pageStart = state.edgeStamp.pageStart;
       const pageEnd = state.edgeStamp.pageEnd;
       const pageCount = pageEnd - pageStart + 1;
-      const fullWidth = state.edgeStamp.height * (state.sealImage.naturalWidth / state.sealImage.naturalHeight);
-      const sliceDrawWidth = fullWidth / pageCount;
 
       for (let pageNumber = pageStart; pageNumber <= pageEnd; pageNumber += 1) {
         const page = pages[pageNumber - 1];
         const sliceBytes = await cropSealSlice(pageNumber - pageStart, pageCount);
         const slicePng = await pdfDoc.embedPng(sliceBytes);
         const { width, height } = page.getSize();
-        const x = state.edgeStamp.edge === 'right' ? width - sliceDrawWidth : 0;
-        const y = height - state.edgeStamp.top - state.edgeStamp.height;
+        const placement = getEdgeStampPlacement({
+          page: { width, height },
+          settings: state.edgeStamp,
+        });
 
         page.drawImage(slicePng, {
-          x,
-          y,
-          width: sliceDrawWidth,
-          height: state.edgeStamp.height,
+          x: placement.x,
+          y: placement.y,
+          width: placement.width,
+          height: placement.height,
+          rotate: degrees(state.edgeStamp.rotation || 0),
           opacity: state.edgeStamp.opacity,
         });
       }
@@ -604,6 +623,7 @@ els.selectEdge.addEventListener('click', () => {
 });
 els.centerNormal.addEventListener('click', () => {
   if (!state.pageSize || !state.sealImage) return;
+  state.hiddenNormalPages.delete(state.currentPage);
   const stamp = defaultNormalStamp(state.pageSize);
   stamp.x = (state.pageSize.width - stamp.width) / 2;
   stamp.y = (state.pageSize.height - stamp.height) / 2;
@@ -611,10 +631,16 @@ els.centerNormal.addEventListener('click', () => {
   syncNormalInputsFromStamp();
   renderOverlays();
 });
+els.deleteNormal.addEventListener('click', () => {
+  state.normalStamps.delete(state.currentPage);
+  state.hiddenNormalPages.add(state.currentPage);
+  renderOverlays();
+  setMessage(`已删除第 ${state.currentPage} 页的普通章。`, 'success');
+});
 [els.normalWidth, els.normalRotation, els.normalOpacity].forEach((input) => {
   input.addEventListener('input', updateStampFromInputs);
 });
-[els.edgeStart, els.edgeEnd, els.edgeTop, els.edgeHeight, els.edgeOpacity].forEach((input) => {
+[els.edgeStart, els.edgeEnd, els.edgeTop, els.edgeInset, els.edgeExposedWidth, els.edgeHeight, els.edgeRotation, els.edgeOpacity].forEach((input) => {
   input.addEventListener('input', updateEdgeFromInputs);
 });
 els.exportPdf.addEventListener('click', exportPdf);
