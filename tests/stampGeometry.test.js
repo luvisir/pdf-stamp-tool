@@ -58,22 +58,26 @@ test('uses the remaining pixels for the last page-edge slice', () => {
   });
 });
 
-test('places right edge stamp with explicit exposed width and edge inset', () => {
+test('places right edge slice without stretching the full seal ratio', () => {
   const placement = getEdgeStampPlacement({
     page: { width: 600, height: 800 },
     settings: {
       top: 100,
       height: 120,
-      exposedWidth: 72,
-      edgeInset: 18,
+      pushIn: 72,
       edge: 'right',
     },
+    image: { width: 900, height: 300 },
+    pageCount: 3,
+    pageOffset: 0,
   });
 
   assert.deepEqual(placement, {
-    x: 510,
+    x: 528,
     y: 580,
-    width: 72,
+    width: 120,
     height: 120,
+    sourceX: 0,
+    sourceWidth: 300,
   });
 });

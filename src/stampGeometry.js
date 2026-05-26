@@ -53,15 +53,20 @@ export function getEdgeStampSlices({ imageWidth, imageHeight, pageCount }) {
   });
 }
 
-export function getEdgeStampPlacement({ page, settings }) {
-  const x = settings.edge === 'left'
-    ? settings.edgeInset
-    : page.width - settings.edgeInset - settings.exposedWidth;
+export function getEdgeStampPlacement({ page, settings, image, pageCount, pageOffset }) {
+  const fullWidth = settings.height * (image.width / image.height);
+  const sliceWidth = fullWidth / pageCount;
+  const fullSealLeft = settings.edge === 'left'
+    ? -fullWidth + settings.pushIn
+    : page.width - settings.pushIn;
+  const x = fullSealLeft + sliceWidth * pageOffset;
 
   return {
     x: round2(x),
     y: round2(page.height - settings.top - settings.height),
-    width: round2(settings.exposedWidth),
+    width: round2(sliceWidth),
     height: round2(settings.height),
+    sourceX: round2((image.width / pageCount) * pageOffset),
+    sourceWidth: round2(image.width / pageCount),
   };
 }

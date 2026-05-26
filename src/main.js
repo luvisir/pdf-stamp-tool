@@ -30,8 +30,7 @@ const state = {
     pageStart: 1,
     pageEnd: 1,
     top: 180,
-    edgeInset: 0,
-    exposedWidth: 85,
+    pushIn: 85,
     height: 110,
     rotation: 0,
     opacity: 0.9,
@@ -119,8 +118,7 @@ app.innerHTML = `
         <label>页码开始<input id="edgeStart" type="number" min="1" value="1" /></label>
         <label>页码结束<input id="edgeEnd" type="number" min="1" value="1" /></label>
         <label>距页面顶部（mm）<input id="edgeTop" type="number" min="0" value="60" /></label>
-        <label>距页面边部（mm）<input id="edgeInset" type="number" min="0" value="0" /></label>
-        <label>露出宽度（mm）<input id="edgeExposedWidth" type="number" min="5" max="80" value="30" /></label>
+        <label>压入页面（mm）<input id="edgePushIn" type="number" min="0" max="160" value="30" /></label>
         <label>高度（mm）<input id="edgeHeight" type="number" min="10" max="220" value="42" /></label>
         <label>旋转（度）<input id="edgeRotation" type="number" min="-180" max="180" value="0" /></label>
         <label>透明度（%）<input id="edgeOpacity" type="number" min="10" max="100" value="90" /></label>
@@ -160,8 +158,7 @@ const els = {
   edgeStart: document.querySelector('#edgeStart'),
   edgeEnd: document.querySelector('#edgeEnd'),
   edgeTop: document.querySelector('#edgeTop'),
-  edgeInset: document.querySelector('#edgeInset'),
-  edgeExposedWidth: document.querySelector('#edgeExposedWidth'),
+  edgePushIn: document.querySelector('#edgePushIn'),
   edgeHeight: document.querySelector('#edgeHeight'),
   edgeRotation: document.querySelector('#edgeRotation'),
   edgeOpacity: document.querySelector('#edgeOpacity'),
@@ -320,6 +317,9 @@ function renderEdgeOverlay() {
   const placement = getEdgeStampPlacement({
     page: state.pageSize,
     settings: state.edgeStamp,
+    image: { width: state.sealImage.naturalWidth, height: state.sealImage.naturalHeight },
+    pageCount: coveredPages,
+    pageOffset,
   });
   const rect = pdfRectToScreenRect({
     pdfRect: placement,
@@ -438,8 +438,7 @@ function updateEdgeFromInputs() {
   state.edgeStamp.pageStart = clamp(Number(els.edgeStart.value) || 1, 1, state.pageCount || 1);
   state.edgeStamp.pageEnd = clamp(Number(els.edgeEnd.value) || state.pageCount || 1, state.edgeStamp.pageStart, state.pageCount || 1);
   state.edgeStamp.top = mmToPt(els.edgeTop.value);
-  state.edgeStamp.edgeInset = mmToPt(els.edgeInset.value);
-  state.edgeStamp.exposedWidth = mmToPt(els.edgeExposedWidth.value);
+  state.edgeStamp.pushIn = mmToPt(els.edgePushIn.value);
   state.edgeStamp.height = mmToPt(els.edgeHeight.value);
   state.edgeStamp.rotation = Number(els.edgeRotation.value) || 0;
   state.edgeStamp.opacity = Number(els.edgeOpacity.value) / 100;
@@ -564,6 +563,9 @@ async function exportPdf() {
         const placement = getEdgeStampPlacement({
           page: { width, height },
           settings: state.edgeStamp,
+          image: { width: state.sealImage.naturalWidth, height: state.sealImage.naturalHeight },
+          pageCount,
+          pageOffset: pageNumber - pageStart,
         });
 
         page.drawImage(slicePng, {
@@ -640,7 +642,7 @@ els.deleteNormal.addEventListener('click', () => {
 [els.normalWidth, els.normalRotation, els.normalOpacity].forEach((input) => {
   input.addEventListener('input', updateStampFromInputs);
 });
-[els.edgeStart, els.edgeEnd, els.edgeTop, els.edgeInset, els.edgeExposedWidth, els.edgeHeight, els.edgeRotation, els.edgeOpacity].forEach((input) => {
+[els.edgeStart, els.edgeEnd, els.edgeTop, els.edgePushIn, els.edgeHeight, els.edgeRotation, els.edgeOpacity].forEach((input) => {
   input.addEventListener('input', updateEdgeFromInputs);
 });
 els.exportPdf.addEventListener('click', exportPdf);
