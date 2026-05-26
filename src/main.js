@@ -8,7 +8,7 @@ import {
   getEdgeStampPlacement,
   pdfRectToScreenRect,
   screenRectToPdfRect,
-  visualRectToPdfRect,
+  visualRectToPdfDrawRect,
 } from './stampGeometry.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
@@ -729,7 +729,7 @@ async function exportPdf() {
         const page = pages[pageNumber - 1];
         if (!page) continue;
         const viewport = await getExportViewport(pageNumber);
-        const drawRect = visualRectToPdfRect({
+        const drawRect = visualRectToPdfDrawRect({
           viewport,
           visualRect: pdfLikeRectToVisualRect(stamp, viewport),
         });
@@ -762,7 +762,7 @@ async function exportPdf() {
           pageCount,
           pageOffset,
         });
-        const drawRect = visualRectToPdfRect({
+        const drawRect = visualRectToPdfDrawRect({
           viewport,
           visualRect: pdfLikeRectToVisualRect(placement, viewport),
         });
