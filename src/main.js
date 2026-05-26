@@ -3,6 +3,7 @@ import { PDFDocument, degrees } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
 
+import { buildStampFilter } from './stampEffects.js';
 import { getEdgeStampPlacement, pdfRectToScreenRect, screenRectToPdfRect } from './stampGeometry.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
@@ -24,6 +25,11 @@ const state = {
   edgeEnabled: false,
   normalStamps: new Map(),
   hiddenNormalPages: new Set(),
+  normalEffects: {
+    blur: 0,
+    brightness: 100,
+    saturation: 100,
+  },
   selectedLayer: 'normal',
   edgeStamp: {
     edge: 'right',
@@ -34,6 +40,11 @@ const state = {
     height: 110,
     rotation: 0,
     opacity: 0.9,
+    effects: {
+      blur: 0,
+      brightness: 100,
+      saturation: 100,
+    },
   },
   dragging: null,
 };
@@ -109,6 +120,12 @@ app.innerHTML = `
         <label>宽度（mm）<input id="normalWidth" type="number" min="10" max="200" value="42" /></label>
         <label>旋转（度）<input id="normalRotation" type="number" min="-180" max="180" value="0" /></label>
         <label>透明度（%）<input id="normalOpacity" type="number" min="10" max="100" value="90" /></label>
+        <div class="effect-group">
+          <h3>章图效果</h3>
+          <label>模糊度（px）<input id="normalBlur" type="number" min="0" max="6" step="0.1" value="0" /></label>
+          <label>亮度（%）<input id="normalBrightness" type="number" min="40" max="140" value="100" /></label>
+          <label>饱和度（%）<input id="normalSaturation" type="number" min="20" max="160" value="100" /></label>
+        </div>
         <button id="centerNormal" type="button">放到当前页中间</button>
         <button id="deleteNormal" class="danger" type="button">删除当前页公章</button>
       </section>
@@ -122,6 +139,12 @@ app.innerHTML = `
         <label>高度（mm）<input id="edgeHeight" type="number" min="10" max="220" value="42" /></label>
         <label>旋转（度）<input id="edgeRotation" type="number" min="-180" max="180" value="0" /></label>
         <label>透明度（%）<input id="edgeOpacity" type="number" min="10" max="100" value="90" /></label>
+        <div class="effect-group">
+          <h3>章图效果</h3>
+          <label>模糊度（px）<input id="edgeBlur" type="number" min="0" max="6" step="0.1" value="0" /></label>
+          <label>亮度（%）<input id="edgeBrightness" type="number" min="40" max="140" value="100" /></label>
+          <label>饱和度（%）<input id="edgeSaturation" type="number" min="20" max="160" value="100" /></label>
+        </div>
       </section>
 
       <section class="panel">
@@ -153,6 +176,9 @@ const els = {
   normalWidth: document.querySelector('#normalWidth'),
   normalRotation: document.querySelector('#normalRotation'),
   normalOpacity: document.querySelector('#normalOpacity'),
+  normalBlur: document.querySelector('#normalBlur'),
+  normalBrightness: document.querySelector('#normalBrightness'),
+  normalSaturation: document.querySelector('#normalSaturation'),
   centerNormal: document.querySelector('#centerNormal'),
   deleteNormal: document.querySelector('#deleteNormal'),
   edgeStart: document.querySelector('#edgeStart'),
@@ -162,6 +188,9 @@ const els = {
   edgeHeight: document.querySelector('#edgeHeight'),
   edgeRotation: document.querySelector('#edgeRotation'),
   edgeOpacity: document.querySelector('#edgeOpacity'),
+  edgeBlur: document.querySelector('#edgeBlur'),
+  edgeBrightness: document.querySelector('#edgeBrightness'),
+  edgeSaturation: document.querySelector('#edgeSaturation'),
   exportPdf: document.querySelector('#exportPdf'),
   message: document.querySelector('#message'),
 };
@@ -202,6 +231,40 @@ function createCanvas(width, height) {
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.ceil(width));
   canvas.height = Math.max(1, Math.ceil(height));
+  return canvas;
+}
+
+function readNormalEffects() {
+  state.normalEffects = {
+    blur: Number(els.normalBlur.value) || 0,
+    brightness: Number(els.normalBrightness.value) || 100,
+    saturation: Number(els.normalSaturation.value) || 100,
+  };
+}
+
+function readEdgeEffects() {
+  state.edgeStamp.effects = {
+    blur: Number(els.edgeBlur.value) || 0,
+    brightness: Number(els.edgeBrightness.value) || 100,
+    saturation: Number(els.edgeSaturation.value) || 100,
+  };
+}
+
+function drawImageWithEffects(context, image, effects, draw) {
+  context.save();
+  context.filter = buildStampFilter(effects);
+  draw();
+  context.restore();
+}
+
+function createEffectCanvasFromImage(image, effects) {
+  const canvas = createCanvas(image.naturalWidth, image.naturalHeight);
+  const context = canvas.getContext('2d');
+
+  drawImageWithEffects(context, image, effects, () => {
+    context.drawImage(image, 0, 0);
+  });
+
   return canvas;
 }
 
@@ -248,7 +311,9 @@ function createRotatedSealCanvas() {
 
   context.translate(canvas.width / 2, canvas.height / 2);
   context.rotate(angle);
-  context.drawImage(state.sealImage, -sourceWidth / 2, -sourceHeight / 2);
+  drawImageWithEffects(context, state.sealImage, state.edgeStamp.effects, () => {
+    context.drawImage(state.sealImage, -sourceWidth / 2, -sourceHeight / 2);
+  });
 
   const bounds = getTrimBounds(canvas);
   const trimmed = createCanvas(bounds.width, bounds.height);
@@ -406,6 +471,7 @@ function renderOverlays() {
       image.style.width = `${rect.width}px`;
       image.style.height = `${rect.height}px`;
       image.style.opacity = String(stamp.opacity);
+      image.style.filter = buildStampFilter(state.normalEffects);
       image.style.transform = `rotate(${stamp.rotation}deg)`;
       image.draggable = false;
       image.title = '拖拽移动普通章';
@@ -544,6 +610,11 @@ function updateStampFromInputs() {
   renderOverlays();
 }
 
+function updateNormalEffectsFromInputs() {
+  readNormalEffects();
+  renderOverlays();
+}
+
 function updateEdgeFromInputs() {
   state.edgeStamp.pageStart = clamp(Number(els.edgeStart.value) || 1, 1, state.pageCount || 1);
   state.edgeStamp.pageEnd = clamp(Number(els.edgeEnd.value) || state.pageCount || 1, state.edgeStamp.pageStart, state.pageCount || 1);
@@ -552,6 +623,7 @@ function updateEdgeFromInputs() {
   state.edgeStamp.height = mmToPt(els.edgeHeight.value);
   state.edgeStamp.rotation = Number(els.edgeRotation.value) || 0;
   state.edgeStamp.opacity = Number(els.edgeOpacity.value) / 100;
+  readEdgeEffects();
   els.edgeStart.value = state.edgeStamp.pageStart;
   els.edgeEnd.value = state.edgeStamp.pageEnd;
   renderOverlays();
@@ -629,13 +701,15 @@ async function exportPdf() {
     setMessage('正在导出 PDF...', '');
     const pdfDoc = await PDFDocument.load(state.pdfBytes.slice());
     const pages = pdfDoc.getPages();
-    const sealPng = await pdfDoc.embedPng(state.sealBytes);
+    const normalEffectPng = state.normalEnabled
+      ? await pdfDoc.embedPng(await canvasToPngBytes(createEffectCanvasFromImage(state.sealImage, state.normalEffects)))
+      : null;
 
     if (state.normalEnabled) {
       for (const [pageNumber, stamp] of state.normalStamps) {
         const page = pages[pageNumber - 1];
         if (!page) continue;
-        page.drawImage(sealPng, {
+        page.drawImage(normalEffectPng, {
           x: stamp.x,
           y: stamp.y,
           width: stamp.width,
@@ -738,7 +812,13 @@ els.deleteNormal.addEventListener('click', () => {
 [els.normalWidth, els.normalRotation, els.normalOpacity].forEach((input) => {
   input.addEventListener('input', updateStampFromInputs);
 });
+[els.normalBlur, els.normalBrightness, els.normalSaturation].forEach((input) => {
+  input.addEventListener('input', updateNormalEffectsFromInputs);
+});
 [els.edgeStart, els.edgeEnd, els.edgeTop, els.edgePushIn, els.edgeHeight, els.edgeRotation, els.edgeOpacity].forEach((input) => {
+  input.addEventListener('input', updateEdgeFromInputs);
+});
+[els.edgeBlur, els.edgeBrightness, els.edgeSaturation].forEach((input) => {
   input.addEventListener('input', updateEdgeFromInputs);
 });
 els.exportPdf.addEventListener('click', exportPdf);

@@ -49,6 +49,11 @@ h2 {
   margin: 0 0 10px;
 }
 
+h3 {
+  font-size: 13px;
+  margin: 0 0 8px;
+}
+
 .muted,
 .status {
   color: #64748b;
@@ -214,6 +219,12 @@ h2 {
   margin-bottom: 10px;
   padding: 8px 10px;
   width: 100%;
+}
+
+.effect-group {
+  border-top: 1px solid #d8dee8;
+  margin-top: 4px;
+  padding-top: 12px;
 }
 
 .primary {
