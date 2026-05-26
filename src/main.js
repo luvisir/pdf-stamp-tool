@@ -1,5 +1,5 @@
 import './styles.css';
-import { PDFDocument, degrees } from 'pdf-lib';
+import { PDFDocument } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
 
@@ -8,7 +8,6 @@ import {
   getEdgeStampPlacement,
   pdfRectToScreenRect,
   screenRectToPdfRect,
-  visualRectToPdfDrawRect,
 } from './stampGeometry.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
@@ -232,20 +231,6 @@ function getCoveredPageCount() {
   return state.edgeStamp.pageEnd - state.edgeStamp.pageStart + 1;
 }
 
-async function getExportViewport(pageNumber) {
-  const page = await state.pdfDoc.getPage(pageNumber);
-  return page.getViewport({ scale: 1 });
-}
-
-function pdfLikeRectToVisualRect(rect, viewport) {
-  return {
-    x: rect.x,
-    y: viewport.height - rect.y - rect.height,
-    width: rect.width,
-    height: rect.height,
-  };
-}
-
 function createCanvas(width, height) {
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.ceil(width));
@@ -387,6 +372,53 @@ async function canvasToPngBytes(canvas) {
       resolve(await blob.arrayBuffer());
     }, 'image/png');
   }));
+}
+
+function drawCanvasImageRotated(context, image, rect, rotation, opacity = 1) {
+  context.save();
+  context.globalAlpha = opacity;
+  context.translate(rect.x + rect.width / 2, rect.y + rect.height / 2);
+  context.rotate((rotation * Math.PI) / 180);
+  context.drawImage(image, -rect.width / 2, -rect.height / 2, rect.width, rect.height);
+  context.restore();
+}
+
+function drawNormalStampOnExportCanvas(context, stamp, image, scale) {
+  const rect = {
+    x: stamp.x * scale,
+    y: (state.pageSize.height - stamp.y - stamp.height) * scale,
+    width: stamp.width * scale,
+    height: stamp.height * scale,
+  };
+
+  drawCanvasImageRotated(context, image, rect, stamp.rotation || 0, stamp.opacity);
+}
+
+function drawEdgeStampOnExportCanvas(context, pageNumber, pageSize, scale) {
+  const { pageStart, pageEnd, opacity } = state.edgeStamp;
+  if (pageNumber < pageStart || pageNumber > pageEnd) return;
+
+  const pageCount = getCoveredPageCount();
+  const pageOffset = pageNumber - pageStart;
+  const slice = createEdgeSlice(pageOffset, pageCount);
+  const placement = getEdgeStampPlacement({
+    page: pageSize,
+    settings: state.edgeStamp,
+    image: { width: slice.rotated.width, height: slice.rotated.height },
+    pageCount,
+    pageOffset,
+  });
+  const rect = {
+    x: placement.x * scale,
+    y: (pageSize.height - placement.y - placement.height) * scale,
+    width: placement.width * scale,
+    height: placement.height * scale,
+  };
+
+  context.save();
+  context.globalAlpha = opacity;
+  context.drawImage(slice.canvas, rect.x, rect.y, rect.width, rect.height);
+  context.restore();
 }
 
 function defaultNormalStamp(pageSize) {
@@ -692,14 +724,6 @@ async function handleSealUpload(event) {
   }
 }
 
-async function cropSealSlice(pageOffset, pageCount) {
-  const slice = createEdgeSlice(pageOffset, pageCount);
-  return {
-    bytes: await canvasToPngBytes(slice.canvas),
-    image: { width: slice.rotated.width, height: slice.rotated.height },
-  };
-}
-
 async function exportPdf() {
   if (!state.pdfBytes) {
     setMessage('请先上传 PDF。', 'error');
@@ -718,66 +742,44 @@ async function exportPdf() {
 
   try {
     setMessage('正在导出 PDF...', '');
-    const pdfDoc = await PDFDocument.load(state.pdfBytes.slice());
-    const pages = pdfDoc.getPages();
-    const normalEffectPng = state.normalEnabled
-      ? await pdfDoc.embedPng(await canvasToPngBytes(createEffectCanvasFromImage(state.sealImage, state.normalEffects)))
+    const outputPdf = await PDFDocument.create();
+    const exportScale = 2;
+    const normalEffectCanvas = state.normalEnabled
+      ? createEffectCanvasFromImage(state.sealImage, state.normalEffects)
       : null;
 
-    if (state.normalEnabled) {
-      for (const [pageNumber, stamp] of state.normalStamps) {
-        const page = pages[pageNumber - 1];
-        if (!page) continue;
-        const viewport = await getExportViewport(pageNumber);
-        const drawRect = visualRectToPdfDrawRect({
-          viewport,
-          visualRect: pdfLikeRectToVisualRect(stamp, viewport),
-        });
-        page.drawImage(normalEffectPng, {
-          x: drawRect.x,
-          y: drawRect.y,
-          width: drawRect.width,
-          height: drawRect.height,
-          rotate: degrees(stamp.rotation || 0),
-          opacity: stamp.opacity,
-        });
+    for (let pageNumber = 1; pageNumber <= state.pageCount; pageNumber += 1) {
+      const sourcePage = await state.pdfDoc.getPage(pageNumber);
+      const baseViewport = sourcePage.getViewport({ scale: 1 });
+      const renderViewport = sourcePage.getViewport({ scale: exportScale });
+      const pageCanvas = createCanvas(renderViewport.width, renderViewport.height);
+      const context = pageCanvas.getContext('2d');
+
+      await sourcePage.render({ canvasContext: context, viewport: renderViewport }).promise;
+
+      const pageSize = { width: baseViewport.width, height: baseViewport.height };
+      state.pageSize = pageSize;
+
+      if (state.normalEnabled && !state.hiddenNormalPages.has(pageNumber)) {
+        const stamp = state.normalStamps.get(pageNumber) || defaultNormalStamp(pageSize);
+        drawNormalStampOnExportCanvas(context, stamp, normalEffectCanvas, exportScale);
       }
+
+      if (state.edgeEnabled) {
+        drawEdgeStampOnExportCanvas(context, pageNumber, pageSize, exportScale);
+      }
+
+      const pagePng = await outputPdf.embedPng(await canvasToPngBytes(pageCanvas));
+      const outputPage = outputPdf.addPage([baseViewport.width, baseViewport.height]);
+      outputPage.drawImage(pagePng, {
+        x: 0,
+        y: 0,
+        width: baseViewport.width,
+        height: baseViewport.height,
+      });
     }
 
-    if (state.edgeEnabled) {
-      const pageStart = state.edgeStamp.pageStart;
-      const pageEnd = state.edgeStamp.pageEnd;
-      const pageCount = getCoveredPageCount();
-
-      for (let pageNumber = pageStart; pageNumber <= pageEnd; pageNumber += 1) {
-        const page = pages[pageNumber - 1];
-        const pageOffset = pageNumber - pageStart;
-        const slice = await cropSealSlice(pageNumber - pageStart, pageCount);
-        const slicePng = await pdfDoc.embedPng(slice.bytes);
-        const viewport = await getExportViewport(pageNumber);
-        const placement = getEdgeStampPlacement({
-          page: { width: viewport.width, height: viewport.height },
-          settings: state.edgeStamp,
-          image: slice.image,
-          pageCount,
-          pageOffset,
-        });
-        const drawRect = visualRectToPdfDrawRect({
-          viewport,
-          visualRect: pdfLikeRectToVisualRect(placement, viewport),
-        });
-
-        page.drawImage(slicePng, {
-          x: drawRect.x,
-          y: drawRect.y,
-          width: drawRect.width,
-          height: drawRect.height,
-          opacity: state.edgeStamp.opacity,
-        });
-      }
-    }
-
-    const stampedBytes = await pdfDoc.save();
+    const stampedBytes = await outputPdf.save();
     const blob = new Blob([stampedBytes], { type: 'application/pdf' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
