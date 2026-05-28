@@ -1,0 +1,8 @@
+services:
+  pdf-stamp-tool:
+    build: .
+    image: pdf-stamp-tool:latest
+    container_name: pdf-stamp-tool
+    ports:
+      - "8080:80"
+    restart: unless-stopped
